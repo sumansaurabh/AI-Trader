@@ -135,12 +135,32 @@ class WebScrapingJinaTool:
 
             response_dict = response.json()
 
+            # Get and validate publish time against TODAY_DATE
+            raw_publish_time = response_dict["data"].get("publishedTime", "unknown")
+            standardized_publish_time = parse_date_to_standard(raw_publish_time)
+
+            # Double-check temporal validity during scraping phase
+            today_date = get_config_value("TODAY_DATE")
+            if today_date and standardized_publish_time != "unknown" and standardized_publish_time != raw_publish_time:
+                try:
+                    article_datetime = datetime.strptime(standardized_publish_time, "%Y-%m-%d %H:%M:%S")
+                    if len(today_date) == 10:
+                        today_datetime = datetime.strptime(today_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                    else:
+                        today_datetime = datetime.strptime(today_date, "%Y-%m-%d %H:%M:%S")
+
+                    if article_datetime > today_datetime:
+                        print(f"⚠️ WARNING: Scraped article has future publish time: {standardized_publish_time} > {today_date}")
+                        print(f"   This indicates a potential lookahead bias issue. URL: {url}")
+                except Exception as e:
+                    logger.error(f"Date validation error during scraping: {e}")
+
             return {
                 "url": response_dict["data"]["url"],
                 "title": response_dict["data"]["title"],
                 "description": response_dict["data"]["description"],
                 "content": response_dict["data"]["content"],
-                "publish_time": response_dict["data"].get("publishedTime", "unknown"),
+                "publish_time": standardized_publish_time,
             }
 
         except Exception as e:
@@ -182,18 +202,37 @@ class WebScrapingJinaTool:
                 raw_date = item.get("date", "unknown")
                 standardized_date = parse_date_to_standard(raw_date)
 
-                # If unable to parse date, keep this result
+                # If unable to parse date, reject this result to prevent lookahead bias
                 if standardized_date == "unknown" or standardized_date == raw_date:
-                    filtered_urls.append(item["url"])
+                    print(f"⚠️ Skipping article with unparseable date: {raw_date} from {item.get('url', 'unknown URL')}")
                     continue
 
-                # Check if before TODAY_DATE
+                # Check if before TODAY_DATE using proper datetime comparison
                 today_date = get_config_value("TODAY_DATE")
                 if today_date:
-                    if today_date > standardized_date:
-                        filtered_urls.append(item["url"])
+                    try:
+                        # Parse both dates to datetime objects for proper comparison
+                        # standardized_date is already in "YYYY-MM-DD HH:MM:SS" format
+                        article_datetime = datetime.strptime(standardized_date, "%Y-%m-%d %H:%M:%S")
+
+                        # Parse today_date - handle both "YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS" formats
+                        if len(today_date) == 10:  # "YYYY-MM-DD" format
+                            # Set to end of day (23:59:59) to include articles from the entire trading day
+                            today_datetime = datetime.strptime(today_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                        else:
+                            today_datetime = datetime.strptime(today_date, "%Y-%m-%d %H:%M:%S")
+
+                        # Only include articles published before or on TODAY_DATE
+                        if article_datetime <= today_datetime:
+                            filtered_urls.append(item["url"])
+                        else:
+                            print(f"🚫 Filtered out future article: {standardized_date} > {today_date} from {item.get('url', 'unknown URL')}")
+                    except Exception as e:
+                        print(f"⚠️ Date parsing error for article date '{standardized_date}' or today '{today_date}': {e}")
+                        # Reject on parsing error to prevent lookahead bias
+                        continue
                 else:
-                    # If TODAY_DATE is not set, keep all results
+                    # If TODAY_DATE is not set, keep all results (non-backtest mode)
                     filtered_urls.append(item["url"])
 
             print(f"Found {len(filtered_urls)} URLs after filtering")
