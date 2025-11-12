@@ -1,0 +1,118 @@
+================================================================================
+                    ISSUE #76 FIX - VISUAL COMPARISON
+================================================================================
+
+SCENARIO: Backtesting on 2025-10-06, AMD article published 2025-10-10
+
+--------------------------------------------------------------------------------
+                              BEFORE FIX (BUGGY)
+--------------------------------------------------------------------------------
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Trading Day: 2025-10-06                                                     │
+│                                                                             │
+│ Agent searches: "AMD OpenAI partnership October 2025"                      │
+│                                                                             │
+│ ┌─────────────────────────────────────────────────────────────────────┐   │
+│ │ _jina_search()                                                      │   │
+│ │                                                                     │   │
+│ │ ❌ String comparison: "2025-10-06" > "2025-10-10 10:00:00"        │   │
+│ │    Result: ALLOWED (WRONG!)                                        │   │
+│ │                                                                     │   │
+│ │ Returns: [url_to_future_article]                                   │   │
+│ └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│ ┌─────────────────────────────────────────────────────────────────────┐   │
+│ │ _jina_scrape()                                                      │   │
+│ │                                                                     │   │
+│ │ ❌ No validation of publish_time                                   │   │
+│ │                                                                     │   │
+│ │ Returns: {                                                          │   │
+│ │   "title": "AMD's Stock Surged 24%...",                            │   │
+│ │   "publish_time": "2025-10-10T10:00:00.000Z",                      │   │
+│ │   "content": "AMD stock surged 24% after OpenAI partnership..."    │   │
+│ │ }                                                                   │   │
+│ └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│ ❌ RESULT: Agent receives future information!                              │
+│    Agent knows AMD will surge 24% before it happens!                       │
+│    INVALID BACKTEST - Lookahead Bias                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+--------------------------------------------------------------------------------
+                              AFTER FIX (CORRECT)
+--------------------------------------------------------------------------------
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Trading Day: 2025-10-06                                                     │
+│                                                                             │
+│ Agent searches: "AMD OpenAI partnership October 2025"                      │
+│                                                                             │
+│ ┌─────────────────────────────────────────────────────────────────────┐   │
+│ │ _jina_search() - LAYER 1 FILTERING                                 │   │
+│ │                                                                     │   │
+│ │ ✅ Proper datetime comparison:                                     │   │
+│ │    parse("2025-10-10") > parse("2025-10-06")                      │   │
+│ │    Result: BLOCKED                                                 │   │
+│ │                                                                     │   │
+│ │ 🚫 BLOCKED in search: url (date: 2025-10-10 > 2025-10-06)        │   │
+│ │                                                                     │   │
+│ │ Returns: [] (empty - future article filtered)                      │   │
+│ └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│ ┌─────────────────────────────────────────────────────────────────────┐   │
+│ │ _jina_scrape() - LAYER 2 FILTERING (if URL passed Layer 1)        │   │
+│ │                                                                     │   │
+│ │ ✅ Validates publish_time against TODAY_DATE                       │   │
+│ │                                                                     │   │
+│ │ IF publish_time > TODAY_DATE:                                      │   │
+│ │   🚫 FUTURE INFORMATION BLOCKED                                    │   │
+│ │   Returns: {"filtered": True, "content": "", "error": "..."}       │   │
+│ └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│ ┌─────────────────────────────────────────────────────────────────────┐   │
+│ │ get_information() - LAYER 3 FILTERING                              │   │
+│ │                                                                     │   │
+│ │ ✅ Filters out results with "filtered": True                       │   │
+│ │                                                                     │   │
+│ │ Returns: "⚠️ Search query returned 1 result(s), but all were      │   │
+│ │           filtered out due to future publication dates"            │   │
+│ └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│ ✅ RESULT: Agent receives NO future information                            │
+│    Agent must make decisions based only on available information           │
+│    VALID BACKTEST - No Lookahead Bias                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+================================================================================
+                              KEY IMPROVEMENTS
+================================================================================
+
+1. PROPER DATE COMPARISON
+   Before: "2025-10-06" > "2025-10-10 10:00:00"  ❌ String comparison
+   After:  datetime(2025,10,6) < datetime(2025,10,10)  ✅ Datetime comparison
+
+2. DUAL-LAYER FILTERING
+   Before: Only search phase (incomplete)
+   After:  Search + Scrape + Output (defense-in-depth)
+
+3. FAIL-CLOSED APPROACH
+   Before: Unknown dates → ALLOWED (fail-open)
+   After:  Unknown dates → BLOCKED (fail-closed)
+
+4. COMPREHENSIVE LOGGING
+   Before: Minimal logging
+   After:  Full transparency with detailed logs
+
+================================================================================
+                              TEST RESULTS
+================================================================================
+
+✅ Date Parsing Test: PASSED
+✅ Date Comparison Test: PASSED
+✅ Backtest Validation Test: PASSED
+✅ Bug Scenario Test: PASSED
+
+🎉 ALL TESTS PASSED - Bug is FIXED!
+
+================================================================================
