@@ -20,82 +20,96 @@ from tools.general_tools import get_config_value
 logger = logging.getLogger(__name__)
 
 
-def parse_date_to_standard(date_str: str) -> str:
+def parse_date_to_datetime(date_str: str) -> Optional[datetime]:
     """
-    Convert various date formats to standard format (YYYY-MM-DD HH:MM:SS)
-
+    Convert various date formats to datetime object for proper comparison.
+    
     Args:
-        date_str: Date string in various formats, such as "2025-10-01T08:19:28+00:00", "4 hours ago", "1 day ago", "May 31, 2025"
-
+        date_str: Date string in various formats
+        
     Returns:
-        Standard format datetime string, such as "2025-10-01 08:19:28"
+        datetime object if parsing succeeds, None otherwise
     """
     if not date_str or date_str == "unknown":
-        return "unknown"
-
+        return None
+    
     # Handle relative time formats
     if "ago" in date_str.lower():
         try:
             now = datetime.now()
             if "hour" in date_str.lower():
                 hours = int(re.findall(r"\d+", date_str)[0])
-                target_date = now - timedelta(hours=hours)
+                return now - timedelta(hours=hours)
             elif "day" in date_str.lower():
                 days = int(re.findall(r"\d+", date_str)[0])
-                target_date = now - timedelta(days=days)
+                return now - timedelta(days=days)
             elif "week" in date_str.lower():
                 weeks = int(re.findall(r"\d+", date_str)[0])
-                target_date = now - timedelta(weeks=weeks)
+                return now - timedelta(weeks=weeks)
             elif "month" in date_str.lower():
                 months = int(re.findall(r"\d+", date_str)[0])
-                target_date = now - timedelta(days=months * 30)  # Approximate handling
-            else:
-                return "unknown"
-            return target_date.strftime("%Y-%m-%d %H:%M:%S")
+                return now - timedelta(days=months * 30)
         except Exception:
-            pass
-
-    # Handle ISO 8601 format, such as "2025-10-01T08:19:28+00:00"
+            return None
+    
+    # Handle ISO 8601 format
     try:
         if "T" in date_str and ("+" in date_str or "Z" in date_str or date_str.endswith("00:00")):
-            # Remove timezone information, keep only date and time part
             if "+" in date_str:
                 date_part = date_str.split("+")[0]
             elif "Z" in date_str:
                 date_part = date_str.replace("Z", "")
             else:
                 date_part = date_str
-
-            # Parse ISO format
+            
             if "." in date_part:
-                # Handle microseconds part, such as "2025-10-01T08:19:28.123456"
-                parsed_date = datetime.strptime(date_part.split(".")[0], "%Y-%m-%dT%H:%M:%S")
+                return datetime.strptime(date_part.split(".")[0], "%Y-%m-%dT%H:%M:%S")
             else:
-                # Standard ISO format "2025-10-01T08:19:28"
-                parsed_date = datetime.strptime(date_part, "%Y-%m-%dT%H:%M:%S")
-            return parsed_date.strftime("%Y-%m-%d %H:%M:%S")
+                return datetime.strptime(date_part, "%Y-%m-%dT%H:%M:%S")
     except Exception:
         pass
-
-    # Handle other common formats
+    
+    # Handle "May 31, 2025" format
     try:
-        # Handle "May 31, 2025" format
         if "," in date_str and len(date_str.split()) >= 3:
-            parsed_date = datetime.strptime(date_str, "%b %d, %Y")
-            return parsed_date.strftime("%Y-%m-%d %H:%M:%S")
+            return datetime.strptime(date_str, "%b %d, %Y")
     except Exception:
         pass
-
+    
+    # Handle "2025-10-01" format
     try:
-        # Handle "2025-10-01" format
         if re.match(r"\d{4}-\d{2}-\d{2}$", date_str):
-            parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
-            return parsed_date.strftime("%Y-%m-%d %H:%M:%S")
+            return datetime.strptime(date_str, "%Y-%m-%d")
     except Exception:
         pass
+    
+    # Handle "2025-10-01 08:19:28" format
+    try:
+        if re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", date_str):
+            return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        pass
+    
+    return None
 
-    # If unable to parse, return original string
-    return date_str
+
+def parse_date_to_standard(date_str: str) -> str:
+    """
+    Convert various date formats to standard format (YYYY-MM-DD HH:MM:SS)
+    
+    DEPRECATED: Use parse_date_to_datetime for proper date comparisons.
+    This function is kept for backward compatibility only.
+
+    Args:
+        date_str: Date string in various formats
+
+    Returns:
+        Standard format datetime string, such as "2025-10-01 08:19:28"
+    """
+    dt = parse_date_to_datetime(date_str)
+    if dt is None:
+        return "unknown"
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 class WebScrapingJinaTool:
@@ -134,13 +148,38 @@ class WebScrapingJinaTool:
                 raise Exception(f"Jina AI Reader Failed for {url}: {response.status_code}")
 
             response_dict = response.json()
+            
+            publish_time = response_dict["data"].get("publishedTime", "unknown")
+            
+            # CRITICAL: Validate publish_time against TODAY_DATE to prevent lookahead bias
+            today_date_str = get_config_value("TODAY_DATE")
+            if today_date_str and publish_time != "unknown":
+                publish_dt = parse_date_to_datetime(publish_time)
+                today_dt = parse_date_to_datetime(today_date_str)
+                
+                if publish_dt and today_dt:
+                    if publish_dt > today_dt:
+                        logger.warning(
+                            f"🚫 LOOKAHEAD BIAS DETECTED: Article published on {publish_time} "
+                            f"is AFTER current trading date {today_date_str}. URL: {url}"
+                        )
+                        print(
+                            f"🚫 LOOKAHEAD BIAS BLOCKED: Rejecting future article from {publish_time} "
+                            f"(current date: {today_date_str})"
+                        )
+                        return {
+                            "url": url,
+                            "content": "",
+                            "error": f"Future information blocked: Article published on {publish_time}, after trading date {today_date_str}",
+                            "blocked_by_lookahead_filter": True
+                        }
 
             return {
                 "url": response_dict["data"]["url"],
                 "title": response_dict["data"]["title"],
                 "description": response_dict["data"]["description"],
                 "content": response_dict["data"]["content"],
-                "publish_time": response_dict["data"].get("publishedTime", "unknown"),
+                "publish_time": publish_time,
             }
 
         except Exception as e:
@@ -172,31 +211,60 @@ class WebScrapingJinaTool:
 
             all_urls = []
             filtered_urls = []
+            blocked_urls = []
+
+            # Get TODAY_DATE for filtering
+            today_date_str = get_config_value("TODAY_DATE")
+            today_dt = parse_date_to_datetime(today_date_str) if today_date_str else None
 
             # Process search results, filter out content from TODAY_DATE and later
             for item in json_data.get("data", []):
                 if "url" not in item:
                     continue
 
-                # Get publication date and convert to standard format
+                url = item["url"]
                 raw_date = item.get("date", "unknown")
-                standardized_date = parse_date_to_standard(raw_date)
+                
+                # Parse the date to datetime object for proper comparison
+                article_dt = parse_date_to_datetime(raw_date)
 
-                # If unable to parse date, keep this result
-                if standardized_date == "unknown" or standardized_date == raw_date:
-                    filtered_urls.append(item["url"])
+                # If TODAY_DATE is not set (not in backtest mode), keep all results
+                if not today_dt:
+                    filtered_urls.append(url)
                     continue
 
-                # Check if before TODAY_DATE
-                today_date = get_config_value("TODAY_DATE")
-                if today_date:
-                    if today_date > standardized_date:
-                        filtered_urls.append(item["url"])
-                else:
-                    # If TODAY_DATE is not set, keep all results
-                    filtered_urls.append(item["url"])
+                # If we can't parse the article date, be conservative during backtesting
+                if article_dt is None:
+                    # During backtesting, exclude unparseable dates to be safe
+                    logger.warning(
+                        f"⚠️ Unable to parse date '{raw_date}' for URL {url}. "
+                        f"Excluding from results during backtesting (TODAY_DATE={today_date_str})"
+                    )
+                    blocked_urls.append((url, raw_date, "unparseable"))
+                    continue
 
-            print(f"Found {len(filtered_urls)} URLs after filtering")
+                # Check if article is published BEFORE or ON the current trading date
+                if article_dt <= today_dt:
+                    filtered_urls.append(url)
+                else:
+                    # Block future information
+                    logger.warning(
+                        f"🚫 LOOKAHEAD BIAS: Blocking URL {url} with publish date {raw_date} "
+                        f"(parsed: {article_dt.strftime('%Y-%m-%d %H:%M:%S')}) "
+                        f"which is AFTER trading date {today_date_str}"
+                    )
+                    blocked_urls.append((url, raw_date, "future"))
+
+            # Log filtering statistics
+            total_results = len(json_data.get("data", []))
+            print(f"📊 Search filtering results: {len(filtered_urls)}/{total_results} URLs passed filter")
+            if blocked_urls:
+                print(f"🚫 Blocked {len(blocked_urls)} URLs due to lookahead bias:")
+                for url, date, reason in blocked_urls[:3]:  # Show first 3
+                    print(f"   - {url[:80]}... (date: {date}, reason: {reason})")
+                if len(blocked_urls) > 3:
+                    print(f"   ... and {len(blocked_urls) - 3} more")
+
             return filtered_urls
 
         except requests.exceptions.RequestException as e:
