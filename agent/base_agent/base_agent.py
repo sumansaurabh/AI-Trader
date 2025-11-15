@@ -368,9 +368,15 @@ class BaseAgent:
 
         print(f"✅ Agent {self.signature} initialization completed")
 
+    @staticmethod
+    def _sanitize_directory_name(name: str) -> str:
+        """Sanitize directory name to be Windows-compatible by replacing invalid characters"""
+        return name.replace(' ', '_').replace(':', '-')
+
     def _setup_logging(self, today_date: str) -> str:
         """Set up log file path"""
-        log_path = os.path.join(self.base_log_path, self.signature, "log", today_date)
+        sanitized_date = self._sanitize_directory_name(today_date)
+        log_path = os.path.join(self.base_log_path, self.signature, "log", sanitized_date)
         if not os.path.exists(log_path):
             os.makedirs(log_path)
         return os.path.join(log_path, "log.jsonl")
