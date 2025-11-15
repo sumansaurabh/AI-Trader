@@ -33,22 +33,34 @@ def parse_date_to_standard(date_str: str) -> str:
     if not date_str or date_str == "unknown":
         return "unknown"
 
-    # Handle relative time formats
+    # Handle relative time formats - use TODAY_DATE as reference if in backtesting mode
     if "ago" in date_str.lower():
         try:
-            now = datetime.now()
+            # Use TODAY_DATE as reference point during backtesting
+            today_date_str = get_config_value("TODAY_DATE")
+            if today_date_str:
+                # Parse TODAY_DATE to datetime object
+                try:
+                    reference_time = datetime.strptime(today_date_str, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    # Try without time component
+                    reference_time = datetime.strptime(today_date_str, "%Y-%m-%d")
+            else:
+                # Live trading mode - use actual current time
+                reference_time = datetime.now()
+
             if "hour" in date_str.lower():
                 hours = int(re.findall(r"\d+", date_str)[0])
-                target_date = now - timedelta(hours=hours)
+                target_date = reference_time - timedelta(hours=hours)
             elif "day" in date_str.lower():
                 days = int(re.findall(r"\d+", date_str)[0])
-                target_date = now - timedelta(days=days)
+                target_date = reference_time - timedelta(days=days)
             elif "week" in date_str.lower():
                 weeks = int(re.findall(r"\d+", date_str)[0])
-                target_date = now - timedelta(weeks=weeks)
+                target_date = reference_time - timedelta(weeks=weeks)
             elif "month" in date_str.lower():
                 months = int(re.findall(r"\d+", date_str)[0])
-                target_date = now - timedelta(days=months * 30)  # Approximate handling
+                target_date = reference_time - timedelta(days=months * 30)  # Approximate handling
             else:
                 return "unknown"
             return target_date.strftime("%Y-%m-%d %H:%M:%S")
@@ -135,12 +147,28 @@ class WebScrapingJinaTool:
 
             response_dict = response.json()
 
+            # Get and validate publish time
+            raw_publish_time = response_dict["data"].get("publishedTime", "unknown")
+            standardized_publish_time = parse_date_to_standard(raw_publish_time)
+
+            # Additional safeguard: validate publish time against TODAY_DATE during backtesting
+            today_date = get_config_value("TODAY_DATE")
+            if today_date and standardized_publish_time != "unknown":
+                if standardized_publish_time > today_date:
+                    print(f"⚠️ Warning: Scraped content has future publish time: {url} (published: {standardized_publish_time}, today: {today_date})")
+                    # Return error to prevent using future information
+                    return {
+                        "url": url,
+                        "content": "",
+                        "error": f"Future information detected: article published on {standardized_publish_time}, current date is {today_date}"
+                    }
+
             return {
                 "url": response_dict["data"]["url"],
                 "title": response_dict["data"]["title"],
                 "description": response_dict["data"]["description"],
                 "content": response_dict["data"]["content"],
-                "publish_time": response_dict["data"].get("publishedTime", "unknown"),
+                "publish_time": raw_publish_time,
             }
 
         except Exception as e:
@@ -182,18 +210,21 @@ class WebScrapingJinaTool:
                 raw_date = item.get("date", "unknown")
                 standardized_date = parse_date_to_standard(raw_date)
 
-                # If unable to parse date, keep this result
-                if standardized_date == "unknown" or standardized_date == raw_date:
-                    filtered_urls.append(item["url"])
-                    continue
-
                 # Check if before TODAY_DATE
                 today_date = get_config_value("TODAY_DATE")
                 if today_date:
-                    if today_date > standardized_date:
+                    # If unable to parse date, REJECT this result to prevent future leakage
+                    if standardized_date == "unknown" or standardized_date == raw_date:
+                        print(f"⚠️ Filtered out URL due to unparseable date: {item['url']} (date: {raw_date})")
+                        continue
+
+                    # Only keep articles published BEFORE or ON the current trading date
+                    if standardized_date <= today_date:
                         filtered_urls.append(item["url"])
+                    else:
+                        print(f"⚠️ Filtered out future article: {item['url']} (published: {standardized_date}, today: {today_date})")
                 else:
-                    # If TODAY_DATE is not set, keep all results
+                    # If TODAY_DATE is not set (live trading), keep all results
                     filtered_urls.append(item["url"])
 
             print(f"Found {len(filtered_urls)} URLs after filtering")
