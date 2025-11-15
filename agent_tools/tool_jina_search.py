@@ -173,7 +173,7 @@ class WebScrapingJinaTool:
             all_urls = []
             filtered_urls = []
 
-            # Process search results, filter out content from TODAY_DATE and later
+            # Process search results, filter out content from AFTER TODAY_DATE (future information)
             for item in json_data.get("data", []):
                 if "url" not in item:
                     continue
@@ -182,21 +182,37 @@ class WebScrapingJinaTool:
                 raw_date = item.get("date", "unknown")
                 standardized_date = parse_date_to_standard(raw_date)
 
-                # If unable to parse date, keep this result
-                if standardized_date == "unknown" or standardized_date == raw_date:
+                # Get TODAY_DATE for backtesting temporal filtering
+                today_date = get_config_value("TODAY_DATE")
+                
+                # If TODAY_DATE is not set, we're in live mode - keep all results
+                if not today_date:
                     filtered_urls.append(item["url"])
+                    logger.debug(f"✅ [Live Mode] Keeping URL (no TODAY_DATE set): {item['url']}")
                     continue
 
-                # Check if before TODAY_DATE
-                today_date = get_config_value("TODAY_DATE")
-                if today_date:
-                    if today_date > standardized_date:
-                        filtered_urls.append(item["url"])
+                # Normalize today_date to date-only format for comparison (remove time component if present)
+                if ' ' in today_date:
+                    today_date_normalized = today_date.split(' ')[0] + " 23:59:59"
                 else:
-                    # If TODAY_DATE is not set, keep all results
-                    filtered_urls.append(item["url"])
+                    today_date_normalized = today_date + " 23:59:59"
 
-            print(f"Found {len(filtered_urls)} URLs after filtering")
+                # If unable to parse article date, be conservative during backtesting
+                # In backtesting mode, we should EXCLUDE articles with unknown dates to prevent potential leakage
+                if standardized_date == "unknown" or standardized_date == raw_date:
+                    logger.warning(f"⚠️  [Backtest Filter] EXCLUDING article with unparseable date: {item['url']} (date: {raw_date})")
+                    continue
+
+                # CRITICAL FIX: Check if article date is ON OR BEFORE today_date
+                # Only include articles published at or before the current simulation date
+                if standardized_date <= today_date_normalized:
+                    filtered_urls.append(item["url"])
+                    logger.debug(f"✅ [Backtest Filter] Keeping article: {item['url']} (published: {standardized_date} <= today: {today_date_normalized})")
+                else:
+                    # This is future information - MUST be filtered out
+                    logger.warning(f"🚫 [Backtest Filter] EXCLUDING FUTURE article: {item['url']} (published: {standardized_date} > today: {today_date_normalized})")
+
+            print(f"Found {len(filtered_urls)} URLs after filtering (TODAY_DATE: {get_config_value('TODAY_DATE')})")
             return filtered_urls
 
         except requests.exceptions.RequestException as e:
