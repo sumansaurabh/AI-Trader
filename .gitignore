@@ -2,6 +2,8 @@ logs/
 data/*.json
 data/*.jsonl
 # data/agent_data/
+# Ignore log directories with timestamp patterns (both old and new formats)
+data/agent_data/*/log/*/
 __pycache__/
 *.pyc
 *.pyo

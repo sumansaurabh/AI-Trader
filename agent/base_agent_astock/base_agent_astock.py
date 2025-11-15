@@ -85,7 +85,8 @@ class DeepSeekChatOpenAI(ChatOpenAI):
 from prompts.agent_prompt_astock import (STOP_SIGNAL,
                                          get_agent_system_prompt_astock)
 from tools.general_tools import (extract_conversation, extract_tool_messages,
-                                 get_config_value, write_config_value)
+                                 get_config_value, write_config_value,
+                                 sanitize_path_component)
 from tools.price_tools import add_no_trade_record
 
 # Load environment variables
@@ -315,7 +316,9 @@ class BaseAgentAStock:
 
     def _setup_logging(self, today_date: str) -> str:
         """Set up log file path"""
-        log_path = os.path.join(self.base_log_path, self.signature, "log", today_date)
+        # Sanitize the date string to be Windows-compatible
+        sanitized_date = sanitize_path_component(today_date)
+        log_path = os.path.join(self.base_log_path, self.signature, "log", sanitized_date)
         if not os.path.exists(log_path):
             os.makedirs(log_path)
         return os.path.join(log_path, "log.jsonl")

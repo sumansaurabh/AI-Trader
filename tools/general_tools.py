@@ -176,3 +176,31 @@ def extract_first_tool_message_content(conversation: dict):
     if isinstance(first, dict):
         return first.get("content")
     return getattr(first, "content", None)
+
+
+def sanitize_path_component(path_component: str) -> str:
+    """
+    Sanitize a path component to be Windows-compatible.
+    
+    Replaces characters that are invalid in Windows file/directory names:
+    - Colons (:) are replaced with hyphens (-)
+    - Spaces are replaced with underscores (_)
+    
+    This ensures cross-platform compatibility, particularly for Windows systems
+    where colons are reserved characters (except for drive letters).
+    
+    Args:
+        path_component: The path component to sanitize (e.g., timestamp string)
+        
+    Returns:
+        Sanitized path component safe for use on all platforms
+        
+    Example:
+        >>> sanitize_path_component("2025-10-01 15:00:00")
+        "2025-10-01_15-00-00"
+    """
+    # Replace colons with hyphens (Windows invalid character)
+    sanitized = path_component.replace(":", "-")
+    # Replace spaces with underscores for better cross-platform compatibility
+    sanitized = sanitized.replace(" ", "_")
+    return sanitized
