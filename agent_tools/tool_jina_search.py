@@ -114,10 +114,31 @@ class WebScrapingJinaTool:
             all_urls = random.sample(all_urls, 1)
         for url in all_urls:
             print(f"Scraping {url}")
-            return_content.append(self._jina_scrape(url))
+            scraped = self._jina_scrape(url)
             print(f"Scraped {url}")
+            # Filter based on publish_time after scraping
+            if self._is_valid_publish_time(scraped.get("publish_time", "unknown")):
+                return_content.append(scraped)
 
         return return_content
+
+    def _is_valid_publish_time(self, publish_time: str) -> bool:
+        """Check if the publish_time is on or before TODAY_DATE."""
+        today_date_str = get_config_value("TODAY_DATE")
+        if not today_date_str:
+            return True  # If no TODAY_DATE set, allow all
+
+        if publish_time == "unknown":
+            return True  # Allow unknown dates to avoid losing info
+
+        try:
+            # Parse publish_time to datetime
+            publish_dt = datetime.fromisoformat(publish_time.replace('Z', '+00:00'))
+            # Parse TODAY_DATE (assume format YYYY-MM-DD)
+            today_dt = datetime.strptime(today_date_str, "%Y-%m-%d")
+            return publish_dt.date() <= today_dt.date()
+        except Exception:
+            return True  # If parsing fails, allow to avoid blocking
 
     def _jina_scrape(self, url: str) -> Dict[str, Any]:
         try:
@@ -171,33 +192,12 @@ class WebScrapingJinaTool:
                 return []
 
             all_urls = []
-            filtered_urls = []
-
-            # Process search results, filter out content from TODAY_DATE and later
             for item in json_data.get("data", []):
-                if "url" not in item:
-                    continue
+                if "url" in item:
+                    all_urls.append(item["url"])
 
-                # Get publication date and convert to standard format
-                raw_date = item.get("date", "unknown")
-                standardized_date = parse_date_to_standard(raw_date)
-
-                # If unable to parse date, keep this result
-                if standardized_date == "unknown" or standardized_date == raw_date:
-                    filtered_urls.append(item["url"])
-                    continue
-
-                # Check if before TODAY_DATE
-                today_date = get_config_value("TODAY_DATE")
-                if today_date:
-                    if today_date > standardized_date:
-                        filtered_urls.append(item["url"])
-                else:
-                    # If TODAY_DATE is not set, keep all results
-                    filtered_urls.append(item["url"])
-
-            print(f"Found {len(filtered_urls)} URLs after filtering")
-            return filtered_urls
+            print(f"Found {len(all_urls)} URLs")
+            return all_urls
 
         except requests.exceptions.RequestException as e:
             print(f"❌ Jina API request failed: {e}")
