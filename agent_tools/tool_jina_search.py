@@ -172,8 +172,9 @@ class WebScrapingJinaTool:
 
             all_urls = []
             filtered_urls = []
+            future_filtered_count = 0
 
-            # Process search results, filter out content from TODAY_DATE and later
+            # Process search results, filter out content from AFTER TODAY_DATE (future information)
             for item in json_data.get("data", []):
                 if "url" not in item:
                     continue
@@ -182,21 +183,31 @@ class WebScrapingJinaTool:
                 raw_date = item.get("date", "unknown")
                 standardized_date = parse_date_to_standard(raw_date)
 
-                # If unable to parse date, keep this result
-                if standardized_date == "unknown" or standardized_date == raw_date:
+                # Get current trading date for comparison
+                today_date = get_config_value("TODAY_DATE")
+                
+                # If TODAY_DATE is not set, keep all results (no filtering)
+                if not today_date:
                     filtered_urls.append(item["url"])
                     continue
 
-                # Check if before TODAY_DATE
-                today_date = get_config_value("TODAY_DATE")
-                if today_date:
-                    if today_date > standardized_date:
-                        filtered_urls.append(item["url"])
-                else:
-                    # If TODAY_DATE is not set, keep all results
-                    filtered_urls.append(item["url"])
+                # If unable to parse date, EXCLUDE this result to be conservative
+                # (unknown dates could be future information)
+                if standardized_date == "unknown" or standardized_date == raw_date:
+                    print(f"⚠️  Excluding article with unparseable date: {raw_date} - {item.get('title', 'No title')[:50]}")
+                    future_filtered_count += 1
+                    continue
 
-            print(f"Found {len(filtered_urls)} URLs after filtering")
+                # CRITICAL FIX: Check if article date is BEFORE OR EQUAL TO today_date
+                # Only include articles published on or before the current trading date
+                if standardized_date <= today_date:
+                    filtered_urls.append(item["url"])
+                else:
+                    # This is future information - MUST be filtered out
+                    print(f"🚫 FILTERED FUTURE INFO: Article dated {standardized_date} (trading date: {today_date}) - {item.get('title', 'No title')[:50]}")
+                    future_filtered_count += 1
+
+            print(f"✅ Found {len(filtered_urls)} valid URLs after filtering (excluded {future_filtered_count} future/unknown articles)")
             return filtered_urls
 
         except requests.exceptions.RequestException as e:
